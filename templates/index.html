@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>视频流测试</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>摄像头视频流测试</h1>
+            <div class="status-container">
+                <span class="status-label">相机状态:</span>
+                <span id="camera-status" class="status-indicator">
+                    {% if camera_available %}
+                    <span class="status-dot available"></span>可用
+                    {% else %}
+                    <span class="status-dot unavailable"></span>不可用
+                    {% endif %}
+                </span>
+                <span class="status-label">视频流:</span>
+                <span id="stream-status" class="status-indicator">
+                    <span class="status-dot inactive"></span>停止
+                </span>
+                <span class="status-label">连接:</span>
+                <span id="connection-status" class="status-indicator">
+                    <span class="status-dot inactive"></span>断开
+                </span>
+            </div>
+        </header>
+        
+        <main>
+            <div class="video-container">
+                <div id="video-placeholder" class="placeholder">
+                    <span>等待视频流启动...</span>
+                </div>
+                <canvas id="video-canvas"></canvas>
+            </div>
+
+            <div class="controls">
+                <button id="start-stream-btn" class="btn primary">开始视频流</button>
+                <button id="stop-stream-btn" class="btn danger">停止视频流</button>
+            </div>
+            
+            <div class="stats-container">
+                <h3>性能统计</h3>
+                <div id="video-stats"></div>
+                <div id="diagnostic-panel"></div>
+            </div>
+        </main>
+        
+        <footer>
+            <p>视频流测试应用 &copy; 2023</p>
+        </footer>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html> 
