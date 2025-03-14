@@ -4,12 +4,19 @@ let videoCanvas, videoContext;
 let videoPlaceholder;
 let startStreamBtn, stopStreamBtn;
 
+// 记录Socket.IO连接时间
+const socketConnectStartTime = Date.now();
+
 // 连接到Socket.IO服务器
 const socket = io({
-    transports: ['websocket'],
+    transports: ['websocket', 'polling'], // 先尝试websocket，失败后尝试polling
     reconnectionAttempts: 5,
-    reconnectionDelay: 1000
+    reconnectionDelay: 1000,
+    timeout: 10000, // 增加超时时间
+    forceNew: true // 强制创建新连接
 });
+
+console.log('Socket.IO连接初始化，时间:', new Date().toISOString());
 
 // 帧统计
 const frameStats = {
@@ -52,7 +59,8 @@ const frameBuffer = {
 
 // Socket.IO 事件处理
 socket.on('connect', () => {
-    console.log('已连接到服务器');
+    console.log('已连接到服务器，连接时间:', (Date.now() - socketConnectStartTime) + 'ms');
+    console.log('Socket ID:', socket.id);
     updateConnectionStatus(true);
     
     // 开始定期测量延迟
@@ -62,8 +70,18 @@ socket.on('connect', () => {
     updateDiagnosticPanel();
 });
 
-socket.on('disconnect', () => {
-    console.log('与服务器断开连接');
+socket.on('connect_error', (error) => {
+    console.error('Socket.IO连接错误:', error);
+    updateConnectionStatus(false);
+});
+
+socket.on('connect_timeout', () => {
+    console.error('Socket.IO连接超时');
+    updateConnectionStatus(false);
+});
+
+socket.on('disconnect', (reason) => {
+    console.log('与服务器断开连接，原因:', reason);
     updateConnectionStatus(false);
     isStreaming = false;
     
@@ -92,8 +110,20 @@ socket.on('video_frame', (data) => {
             
             // 记录帧元数据
             if (data.count && data.size) {
-                console.log(`帧 #${data.count} 接收, 大小: ${Math.round(data.size/1024)}KB`);
+                if (frameStats.received % 10 === 0 || frameStats.received < 5) {
+                    console.log(`帧 #${data.count} 接收, 大小: ${Math.round(data.size/1024)}KB`);
+                }
                 frameStats.lastFrameSize = data.size;
+            }
+            
+            // 检查视频元素状态
+            if (frameStats.received <= 3) {
+                console.log('视频容器状态:', {
+                    canvasDisplay: videoCanvas.style.display,
+                    placeholderDisplay: videoPlaceholder.style.display,
+                    canvasWidth: videoCanvas.width,
+                    canvasHeight: videoCanvas.height
+                });
             }
             
             // 记录帧接收时间
@@ -263,6 +293,10 @@ function displayVideoFrame(frameData) {
         return;
     }
     
+    // 确保Canvas可见
+    videoPlaceholder.style.display = 'none';
+    videoCanvas.style.display = 'block';
+    
     // 创建图像对象
     const img = new Image();
     img.onload = () => {
@@ -311,8 +345,13 @@ function displayVideoFrame(frameData) {
         }
     };
     
-    // 设置图像源
-    img.src = 'data:image/jpeg;base64,' + frameData;
+    // 设置图像源 - 确保正确使用base64格式
+    try {
+        img.src = 'data:image/jpeg;base64,' + frameData;
+        console.log('图像源已设置，大小约: ' + Math.round(frameData.length/1024) + 'KB');
+    } catch (error) {
+        console.error('设置图像源时出错:', error);
+    }
 }
 
 // 创建一个处理帧的函数，可以独立调用
@@ -523,11 +562,22 @@ document.addEventListener('DOMContentLoaded', function() {
     startStreamBtn = document.getElementById('start-stream-btn');
     stopStreamBtn = document.getElementById('stop-stream-btn');
     
+    console.log('DOM元素获取：', {
+        videoCanvas: !!videoCanvas,
+        videoPlaceholder: !!videoPlaceholder,
+        startStreamBtn: !!startStreamBtn,
+        stopStreamBtn: !!stopStreamBtn
+    });
+    
     // 初始化canvas
     if (videoCanvas) {
         // 设置canvas大小
         videoCanvas.width = 640;
         videoCanvas.height = 480;
+        
+        // 确保canvas样式正确
+        videoCanvas.style.backgroundColor = '#000';
+        videoCanvas.style.display = 'none'; // 初始隐藏，等待视频流
         
         // 获取绘图上下文
         videoContext = videoCanvas.getContext('2d');
@@ -539,11 +589,19 @@ document.addEventListener('DOMContentLoaded', function() {
             videoContext.fillStyle = 'white';
             videoContext.textAlign = 'center';
             videoContext.fillText('正在等待视频流...', videoCanvas.width / 2, videoCanvas.height / 2);
+            console.log('视频Canvas初始化成功');
         } else {
             console.error('无法获取canvas上下文');
         }
     } else {
         console.error('找不到视频canvas元素');
+    }
+    
+    // 确保placeholder正确显示
+    if (videoPlaceholder) {
+        videoPlaceholder.style.display = 'flex';
+    } else {
+        console.error('找不到视频placeholder元素');
     }
     
     // 创建诊断面板
@@ -567,6 +625,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // 初始化连接状态
     updateConnectionStatus(socket.connected);
+    console.log('初始Socket连接状态:', socket.connected ? '已连接' : '未连接');
     
     // 如果已经连接，则测量一次延迟
     if (socket.connected) {
