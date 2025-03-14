@@ -4,15 +4,26 @@ let videoCanvas, videoContext;
 let videoPlaceholder;
 let startStreamBtn, stopStreamBtn;
 
+// 启用调试模式
+const DEBUG_MODE = true;
+function debugLog(...args) {
+    if (DEBUG_MODE) {
+        console.log('[DEBUG]', ...args);
+    }
+}
+
 // 记录Socket.IO连接时间
 const socketConnectStartTime = Date.now();
 
 // 连接到Socket.IO服务器
 const socket = io({
     transports: ['websocket', 'polling'], // 先尝试websocket，失败后尝试polling
-    reconnectionAttempts: 5,
+    reconnectionAttempts: 10,  // 增加重连次数
     reconnectionDelay: 1000,
-    timeout: 10000, // 增加超时时间
+    reconnectionDelayMax: 5000,  // 最大重连延迟
+    timeout: 20000, // 增加连接超时时间
+    pingTimeout: 60000,  // 匹配服务器端的ping超时设置
+    pingInterval: 25000,  // 匹配服务器端的ping间隔
     forceNew: true // 强制创建新连接
 });
 
@@ -61,6 +72,15 @@ const frameBuffer = {
 socket.on('connect', () => {
     console.log('已连接到服务器，连接时间:', (Date.now() - socketConnectStartTime) + 'ms');
     console.log('Socket ID:', socket.id);
+    
+    // 在DOM就绪前连接会导致问题，检查相关DOM元素
+    debugLog('连接时DOM元素状态:', {
+        videoCanvasExists: !!videoCanvas,
+        videoPlaceholderExists: !!videoPlaceholder,
+        startBtnExists: !!startStreamBtn,
+        stopBtnExists: !!stopStreamBtn
+    });
+    
     updateConnectionStatus(true);
     
     // 开始定期测量延迟
@@ -104,25 +124,38 @@ socket.on('status_update', (data) => {
 socket.on('video_frame', (data) => {
     const receiveStartTime = Date.now();
     
+    // 每10帧或前5帧输出详细信息
+    const shouldLogDetails = frameStats.received % 10 === 0 || frameStats.received < 5;
+    
     try {
+        debugLog('收到视频帧事件', {
+            hasData: !!data,
+            hasFrame: data && !!data.frame,
+            frameLength: data && data.frame ? data.frame.length : 0,
+            count: data && data.count ? data.count : 'unknown'
+        });
+        
         if (data && data.frame) {
             frameStats.received++;
             
             // 记录帧元数据
             if (data.count && data.size) {
-                if (frameStats.received % 10 === 0 || frameStats.received < 5) {
+                if (shouldLogDetails) {
                     console.log(`帧 #${data.count} 接收, 大小: ${Math.round(data.size/1024)}KB`);
                 }
                 frameStats.lastFrameSize = data.size;
             }
             
             // 检查视频元素状态
-            if (frameStats.received <= 3) {
-                console.log('视频容器状态:', {
-                    canvasDisplay: videoCanvas.style.display,
-                    placeholderDisplay: videoPlaceholder.style.display,
-                    canvasWidth: videoCanvas.width,
-                    canvasHeight: videoCanvas.height
+            if (frameStats.received <= 3 || shouldLogDetails) {
+                debugLog('视频容器状态:', {
+                    isStreaming: isStreaming,
+                    canvasExists: !!videoCanvas,
+                    contextExists: !!videoContext,
+                    canvasDisplay: videoCanvas ? videoCanvas.style.display : 'undefined',
+                    placeholderDisplay: videoPlaceholder ? videoPlaceholder.style.display : 'undefined',
+                    canvasWidth: videoCanvas ? videoCanvas.width : 'undefined',
+                    canvasHeight: videoCanvas ? videoCanvas.height : 'undefined'
                 });
             }
             
@@ -160,6 +193,7 @@ socket.on('video_frame', (data) => {
             
             // 如果这是第一帧，立即处理
             if (frameStats.received === 1 || frameBuffer.frames.length === 1) {
+                debugLog('处理第一帧或单帧缓冲区');
                 processNextFrame();
             }
         } else {
@@ -294,12 +328,31 @@ function displayVideoFrame(frameData) {
     }
     
     // 确保Canvas可见
+    debugLog('设置视频容器显示状态', {
+        beforeCanvasDisplay: videoCanvas.style.display,
+        beforePlaceholderDisplay: videoPlaceholder.style.display
+    });
+    
     videoPlaceholder.style.display = 'none';
     videoCanvas.style.display = 'block';
     
+    debugLog('视频容器显示状态已更新', {
+        afterCanvasDisplay: videoCanvas.style.display,
+        afterPlaceholderDisplay: videoPlaceholder.style.display
+    });
+    
     // 创建图像对象
     const img = new Image();
+    
+    // 图像加载完成的回调
     img.onload = () => {
+        debugLog('图像加载成功', {
+            imgWidth: img.width,
+            imgHeight: img.height,
+            canvasWidth: videoCanvas.width,
+            canvasHeight: videoCanvas.height
+        });
+        
         // 清除画布
         videoContext.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
         
@@ -324,7 +377,23 @@ function displayVideoFrame(frameData) {
         }
         
         // 绘制图像
-        videoContext.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+        try {
+            videoContext.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+            debugLog('图像已绘制到Canvas上', {
+                drawWidth, drawHeight, offsetX, offsetY
+            });
+            
+            // 在画布上显示帧编号和时间戳，帮助调试
+            videoContext.font = '16px Arial';
+            videoContext.fillStyle = 'lime';
+            videoContext.fillText(`帧 #${frameStats.displayed}`, 10, 20);
+            
+            const now = new Date().toLocaleTimeString();
+            videoContext.fillText(now, 10, 40);
+            
+        } catch (drawError) {
+            console.error('绘制图像时出错', drawError);
+        }
         
         // 更新统计
         frameStats.displayed++;
@@ -337,6 +406,18 @@ function displayVideoFrame(frameData) {
     
     img.onerror = (error) => {
         console.error('加载图像时出错:', error);
+        console.error('图像URL前30个字符:', img.src.substring(0, 30) + '...');
+        
+        // 尝试分析帧数据
+        if (frameData) {
+            if (frameData.length < 100) {
+                console.error('帧数据长度异常短:', frameData.length);
+            }
+            if (!/^[A-Za-z0-9+/=]+$/.test(frameData)) {
+                console.error('帧数据包含非base64字符');
+            }
+        }
+        
         frameStats.errors++;
         
         // 如果缓冲区中还有帧，处理下一帧
@@ -347,8 +428,23 @@ function displayVideoFrame(frameData) {
     
     // 设置图像源 - 确保正确使用base64格式
     try {
-        img.src = 'data:image/jpeg;base64,' + frameData;
-        console.log('图像源已设置，大小约: ' + Math.round(frameData.length/1024) + 'KB');
+        if (!frameData || frameData.length < 10) {
+            console.error('无效的帧数据, 长度:', frameData ? frameData.length : 0);
+            return;
+        }
+        
+        // 确保使用纯净的base64字符串
+        const base64Pattern = /^[A-Za-z0-9+/=]+$/;
+        if (!base64Pattern.test(frameData)) {
+            console.warn('帧数据包含非base64字符，尝试清理');
+            const cleanFrameData = frameData.replace(/[^A-Za-z0-9+/=]/g, '');
+            img.src = 'data:image/jpeg;base64,' + cleanFrameData;
+        } else {
+            img.src = 'data:image/jpeg;base64,' + frameData;
+        }
+        
+        debugLog('图像源已设置，数据前20个字符:', frameData.substring(0, 20) + '...');
+        debugLog('图像源已设置，大小约: ' + Math.round(frameData.length/1024) + 'KB');
     } catch (error) {
         console.error('设置图像源时出错:', error);
     }
@@ -569,6 +665,12 @@ document.addEventListener('DOMContentLoaded', function() {
         stopStreamBtn: !!stopStreamBtn
     });
     
+    // 检查是否存在缺失的DOM元素
+    if (!videoCanvas || !videoPlaceholder || !startStreamBtn || !stopStreamBtn) {
+        console.error('一些DOM元素未找到，这可能会导致视频显示问题!');
+        alert('页面加载不完全，可能需要刷新页面，或检查HTML结构');
+    }
+    
     // 初始化canvas
     if (videoCanvas) {
         // 设置canvas大小
@@ -590,6 +692,15 @@ document.addEventListener('DOMContentLoaded', function() {
             videoContext.textAlign = 'center';
             videoContext.fillText('正在等待视频流...', videoCanvas.width / 2, videoCanvas.height / 2);
             console.log('视频Canvas初始化成功');
+            
+            // 测试绘制能力
+            try {
+                videoContext.fillStyle = 'red';
+                videoContext.fillRect(10, 10, 50, 50);
+                console.log('Canvas绘制测试成功');
+            } catch (e) {
+                console.error('Canvas绘制测试失败', e);
+            }
         } else {
             console.error('无法获取canvas上下文');
         }

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>视频帧测试页面</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .video-container {
+            width: 640px;
+            height: 480px;
+            background-color: #000;
+            margin: 20px 0;
+            position: relative;
+            border: 2px solid red;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .placeholder {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            background-color: #333;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 20px;
+            margin-right: 10px;
+            cursor: pointer;
+        }
+        #log {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            background-color: #f5f5f5;
+        }
+    </style>
+    <script src="{{ url_for('static', filename='js/socket.io.min.js') }}"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>视频帧测试页面</h1>
+        
+        <div class="video-container">
+            <canvas id="testCanvas"></canvas>
+            <div id="placeholder" class="placeholder">等待视频流...</div>
+        </div>
+        
+        <div class="controls">
+            <button id="testImageBtn">测试绘制静态图像</button>
+            <button id="connectBtn">连接Socket.IO</button>
+            <button id="startStreamBtn">开始视频流</button>
+        </div>
+        
+        <h3>日志输出</h3>
+        <div id="log"></div>
+    </div>
+    
+    <script>
+        // 日志函数
+        function log(message) {
+            const logElement = document.getElementById('log');
+            const now = new Date();
+            const time = now.toTimeString().split(' ')[0];
+            logElement.innerHTML += `<div>[${time}] ${message}</div>`;
+            logElement.scrollTop = logElement.scrollHeight;
+            console.log(message);
+        }
+        
+        // 全局变量
+        let socket;
+        let canvas = document.getElementById('testCanvas');
+        let placeholder = document.getElementById('placeholder');
+        let ctx = canvas.getContext('2d');
+        
+        // 初始化
+        function init() {
+            log('页面加载完成，初始化组件...');
+            
+            // 设置Canvas大小
+            canvas.width = 640;
+            canvas.height = 480;
+            
+            // 绘制初始消息
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.font = '20px Arial';
+            ctx.fillStyle = 'white';
+            ctx.textAlign = 'center';
+            ctx.fillText('测试页面已加载', canvas.width / 2, canvas.height / 2);
+            
+            // 测试绘制红色矩形，确认Canvas正常工作
+            ctx.fillStyle = 'red';
+            ctx.fillRect(10, 10, 50, 50);
+            log('Canvas初始化成功');
+            
+            // 绑定按钮事件
+            document.getElementById('testImageBtn').addEventListener('click', testDrawImage);
+            document.getElementById('connectBtn').addEventListener('click', connectSocket);
+            document.getElementById('startStreamBtn').addEventListener('click', startStream);
+        }
+        
+        // 测试绘制静态图像
+        function testDrawImage() {
+            log('测试绘制静态图像...');
+            
+            // 创建测试图像 - 一个简单的红色矩形的base64编码
+            const testImageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAABmJLR0QA/wD/AP+gvaeTAAAAB3RJTUUH5gMOBgUOqJ3XXwAABO9JREFUeNrt3EFy2zAMBVA7vf8hm+yaZGnRokQRJPDexWRsy0Pw80PYnb6+vr6BUP/2fgDo6X+HXvX5+flsWXzfbX+Pdrlg77fTPg6+TN4Jgze9+YKwLvJu7+hDL6ABYEnMAawGPF9wdRJgIR8CGhBLYAJodvLqucCbF4yl/0QwhQaApawC0CX9ixdsW7E/ugjQhjWAdDl5zy6CcZutlgNusgYQK36dLK7TXbDLvTnb5sVlGgBeQQNgSexMYIb0r16w7e+5+uBt4+/qMoM/4jINAMEEQI/cmbVSrQFc3UfQ8Qve3GvQ9gtSZ+XijyaA13n1PgDK6ZH+q+m/uqDj0oOvAxqgASCVNYB0OVncsfiChT0Hhe8gXP0RV78giwZAKmsAzVIP1F19hVsK1vkVbps/avbgbQcJ4FuPeS+XKFZLP1BlDSBdTh5Q8OaC72NxwY4zcoVXADRgDSBdTk5NQY/0r/4IVl/ncjQALKUB8Ar90j+1YKGVZ+S2jb+t40AGSzQgkDWAVzkr/QvfQfjwC/b+jNwYdxBmbTZaC7hJA8CSGIC8XJGa/sXzh6tnHXucP1z9ERbTAAimAaRLzVnpP5dg74LFlQdZuwicCbhJA0Aw+wCSxeV/j/SvLtj77sKrBdumj9V7ElYP1FkDCGYCIJgJIF1czpqa/h6bdxafV7D6hE8WE8BNJgCCmQBSxeX/rPQXKpi1/2DbnolC47OYCSCYCYBgJoBUcTlrdvqHFhxa8PEFt50MbBt/qy8wAdzXf6+4l0s6m5r+ogWHFrz60G2/n+k8IGgASJX1QZAu6V9d8PF3ECb+fnqMz2ImgGAmAIKZAFLFLW3PSn/RgkMLPtA2fzh0HGQxARDMBEAwE0CquJw1Nf09PiN3aEHnAUFMAKmSpuZZ6S9ecGjBoQWL48/QcZA1PtsG0JcGQDBrAOniclaP9I/afzC04NXCRceB8wAasDlIcRVhY8tIaf9x2PgzbCx4kwaAYNYActzMWY+kptSk/Efb9Ez98d/MAOCbNYB0cTmrdvoLFnz8A6LL+Gsbn6njL2t8Dj8BuBdwq3nDr9Q/lHGLALd+BM/eC1jnXsDlwRjy+0l9BN1PQovrAP4TA1CbxfhkrgFo/H3SH8oEQDA7AdPF5Sx6r3oO/f1Mre5XWDg+SzQgUNZbgN65ZOGRwtS3AGfNyI26AzJrfK6Oz9W7Jj0C3KcBECxrDYAh70xgavqnpv9m+ms+eNtr3G89uewZQAPAUhoQTAMCJc35p6a/3wdJ39yLMDT9NW8jtAZwnwaAYCaAYCaAQHWy1iP9Q9O/unDNgm3jb3HB1efhJoD7NAACZa0BkKVH+lffizC04NCCPdJfdHyungysvh2YxUwABDMBEMwEEChuar5f+rdNbQ8dZNCjYI+tbUPHQdb4bBvAY0wABDMBEMwaQKC4pbG29FfdeTi04OoFV9d/dByYAB6jARDMGkCguKz1m/4es29DC7aln8VxkMUaAMGsAQQywbzkHX5tM3Kt0z904fvqgsMfrO34HG4NeIw1AIJpQCCv8CsPYbkytZz1+IKFE39Z43NGPp0HeJwGQDBrAIGGJv7dC7bNyL353NtWINpWIMaOP2sAj9MACGYNIFDW+bjUr94j/YcWXGfo+FtNf9v4XH0uTwI8TgMgmDWAQFnTZWr6hxbM+unsnYyuPhczASTQAAhmDSBQ1kGx1PSPvTfRe4DbeQtAMA0gUJctArPSP7Tg0ILDxffCUJkGQLCkNQCoxRoAwTQAgmkABNMACKYBEEwDIJgGQLB/PN7wH1MCxPsAAAAASUVORK5CYII=';
+            
+            // 创建测试图像
+            const img = new Image();
+            img.onload = function() {
+                log('测试图像加载成功，大小: ' + img.width + 'x' + img.height);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                placeholder.style.display = 'none';
+                log('测试图像绘制完成');
+            };
+            
+            img.onerror = function(error) {
+                log('测试图像加载失败: ' + error);
+            };
+            
+            // 使用base64编码的测试图像
+            img.src = 'data:image/png;base64,' + testImageBase64;
+        }
+        
+        // 连接Socket.IO
+        function connectSocket() {
+            log('尝试连接Socket.IO服务器...');
+            
+            // 创建Socket.IO连接
+            socket = io({
+                transports: ['websocket', 'polling'],
+                reconnectionAttempts: 10,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000,
+                timeout: 20000,
+                pingTimeout: 60000,
+                pingInterval: 25000
+            });
+            
+            // 连接事件
+            socket.on('connect', function() {
+                log('已连接到服务器，Socket ID: ' + socket.id);
+            });
+            
+            // 连接错误
+            socket.on('connect_error', function(error) {
+                log('连接错误: ' + error);
+            });
+            
+            // 断开连接
+            socket.on('disconnect', function(reason) {
+                log('与服务器断开连接，原因: ' + reason);
+            });
+            
+            // 视频帧接收
+            socket.on('video_frame', function(data) {
+                log('收到视频帧 #' + data.count + ', 大小: ' + Math.round(data.size/1024) + 'KB');
+                
+                // 在这里显示视频帧
+                displayFrame(data.frame);
+            });
+            
+            // 状态更新
+            socket.on('stream_status', function(data) {
+                log('流状态: ' + data.status);
+            });
+        }
+        
+        // 显示视频帧
+        function displayFrame(frameData) {
+            const img = new Image();
+            
+            img.onload = function() {
+                log('帧图像加载成功，大小: ' + img.width + 'x' + img.height);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                placeholder.style.display = 'none';
+            };
+            
+            img.onerror = function(error) {
+                log('帧图像加载失败，尝试检查base64数据');
+                if (frameData.length < 100) {
+                    log('帧数据异常短: ' + frameData.length + ' 字符');
+                }
+                log('帧数据前30个字符: ' + frameData.substring(0, 30) + '...');
+            };
+            
+            img.src = 'data:image/jpeg;base64,' + frameData;
+        }
+        
+        // 开始视频流
+        function startStream() {
+            if (!socket) {
+                log('错误: 请先连接Socket.IO');
+                return;
+            }
+            
+            log('请求开始视频流...');
+            socket.emit('start_stream');
+        }
+        
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
+ 

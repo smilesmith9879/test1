@@ -25,9 +25,10 @@ app.config['SECRET_KEY'] = 'videostreamtest2023'
 socketio = SocketIO(
     app, 
     cors_allowed_origins="*",
-    ping_timeout=10,
-    ping_interval=5,
-    max_http_buffer_size=5 * 1024 * 1024
+    ping_timeout=60,  # 增加ping超时时间，从10秒改为60秒
+    ping_interval=25,  # 增加ping间隔，从5秒改为25秒
+    max_http_buffer_size=5 * 1024 * 1024,
+    async_mode='threading'  # 使用线程模式以提高性能
 )
 
 # 模拟相机类，用于测试无相机情况
@@ -105,6 +106,10 @@ if not camera_available:
 @app.route('/')
 def index():
     return render_template('index.html', camera_available=camera_available)
+
+@app.route('/test')
+def test():
+    return render_template('test_frame.html', camera_available=camera_available)
 
 @app.route('/status')
 def status():
