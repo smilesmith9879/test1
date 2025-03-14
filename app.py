@@ -24,12 +24,10 @@ app.config['SECRET_KEY'] = 'videostreamtest2023'
 # 优化Socket.IO配置
 socketio = SocketIO(
     app, 
-    cors_allowed_origins="*", 
-    async_mode='eventlet',
+    cors_allowed_origins="*",
     ping_timeout=10,
     ping_interval=5,
-    max_http_buffer_size=5 * 1024 * 1024,
-    transports=['websocket']  
+    max_http_buffer_size=5 * 1024 * 1024
 )
 
 # 模拟相机类，用于测试无相机情况
@@ -245,17 +243,17 @@ def generate_frames():
                     
                     # 发送帧，测量发送时间
                     emit_start = time.time()
-                    # 逐个发送帧到各个客户端，而不是广播给所有客户端
-                    clients = socketio.server.get_namespace('/')._get_clients()
-                    client_count = len(clients)
-                    
-                    for client_sid in clients:
-                        socketio.emit('video_frame', frame_data, room=client_sid)
+                    try:
+                        # 直接广播帧到所有客户端，而不是尝试获取客户端列表
+                        socketio.emit('video_frame', frame_data)
                         
-                    emit_time = time.time() - emit_start
-                    
-                    if emit_time > 0.2:  # 如果发送时间过长，记录日志
-                        logger.warning(f"视频流: 向 {client_count} 个客户端发送帧耗时 {emit_time:.3f}s")
+                        emit_time = time.time() - emit_start
+                        
+                        if emit_time > 0.2:  # 如果发送时间过长，记录日志
+                            logger.warning(f"视频流: 发送帧耗时 {emit_time:.3f}s")
+                    except Exception as emit_error:
+                        logger.error(f"发送帧错误: {emit_error}")
+                        # 继续处理，不要中断流
                     
                     # 每处理100帧，记录一次总体信息
                     if frame_count % 100 == 0:
@@ -278,7 +276,7 @@ def generate_frames():
                         time.sleep(sleep_time)
                     elif process_time > 1.5/TARGET_FPS:  # 如果处理时间超过目标帧率的1.5倍，记录警告
                         logger.warning(f"视频流: 帧处理时间 {process_time:.3f}s 超过目标帧时间 {1.0/TARGET_FPS:.3f}s")
-                        
+                    
                 except Exception as encode_error:
                     logger.error(f"帧编码错误: {encode_error}")
                     time.sleep(0.1)
